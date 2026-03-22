@@ -1,0 +1,12 @@
+torchdata>=0.8.0
+datasets>=2.21.0
+blobfile
+tiktoken
+tomli>=1.1.0
+fsspec
+
+[dev]
+pre-commit
+pytest
+pytest-cov
+tensorboard
