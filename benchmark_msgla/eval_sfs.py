@@ -1,14 +1,16 @@
 """
-eval_dcp.py — Zero-shot recall evaluation for GLA-family checkpoints in DCP format.
-Evaluates on SWDE (Accuracy), FDA (Accuracy), and SQUAD (F1).
+eval_sfs.py — Zero-shot recall evaluation for MS-GLA checkpoints in DCP format.
+Evaluates on SWDE (Accuracy), FDA (F1), and SQUAD (F1).
 
 Examples:
-    python eval_dcp.py --checkpoint_path /path/to/exp/gla-340M --step 10800 --model_ref /path/to/exp/gla-340M
-    python eval_dcp.py --checkpoint_path /path/to/checkpoint/step-10800 --model_ref /path/to/exp/gla-340M --tasks squad --max_samples 10
+    python eval_sfs.py --checkpoint_path /path/to/exp/msgla-340M --step 10800 --model_ref /path/to/exp/msgla-340M
+    python eval_sfs.py --checkpoint_path /path/to/checkpoint/step-10800 --model_ref /path/to/exp/msgla-340M --tasks squad --max_samples 10
 """
 
 import argparse
+import csv
 import io
+import json
 import os
 import re
 import string
@@ -23,26 +25,16 @@ import torch
 import torch.serialization
 from datasets import load_dataset
 from torch.distributed.checkpoint.format_utils import dcp_to_torch_save
-from transformers import AutoConfig, AutoTokenizer
+from transformers import AutoTokenizer
 
-# ── make local model packages importable ────────────────────────
+# ── make custom_models importable ────────────────────────────────
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-REPO_ROOT = os.path.dirname(SCRIPT_DIR)
-FLAME_ROOT = os.path.join(REPO_ROOT, "flame")
-FLA_ROOT = os.path.join(REPO_ROOT, "3rd_party", "flash-linear-attention")
-for path in (FLAME_ROOT, FLA_ROOT):
-    if path not in sys.path:
-        sys.path.insert(0, path)
+FLAME_ROOT = os.path.join(os.path.dirname(SCRIPT_DIR), "flame")
+if FLAME_ROOT not in sys.path:
+    sys.path.insert(0, FLAME_ROOT)
 
-# Importing these packages triggers AutoConfig / AutoModelForCausalLM registration.
+# Importing the package triggers AutoConfig / AutoModelForCausalLM registration
 from custom_models.ms_gla import MSGLAConfig, MSGLAForCausalLM  # noqa: E402
-from fla.models.gla import GLAConfig, GLAForCausalLM  # noqa: E402
-
-
-MODEL_REGISTRY = {
-    "gla": (GLAConfig, GLAForCausalLM),
-    "ms_gla": (MSGLAConfig, MSGLAForCausalLM),
-}
 
 
 # ================================================================
@@ -121,17 +113,8 @@ def load_model_and_tokenizer_from_dcp(
         tokenizer.pad_token = tokenizer.eos_token
 
     print(f"Loading model config from {model_ref} ...")
-    auto_config = AutoConfig.from_pretrained(model_ref, trust_remote_code=True)
-    model_type = getattr(auto_config, "model_type", None)
-    if model_type not in MODEL_REGISTRY:
-        supported = ", ".join(sorted(MODEL_REGISTRY))
-        raise ValueError(
-            f"Unsupported model_type {model_type!r} in {model_ref}. Supported types: {supported}."
-        )
-    config_cls, model_cls = MODEL_REGISTRY[model_type]
-    config = config_cls.from_pretrained(model_ref)
-    model = model_cls(config)
-    print(f"Instantiated model_type={model_type!r}.")
+    config = MSGLAConfig.from_pretrained(model_ref)
+    model = MSGLAForCausalLM(config)
 
     state = load_state_from_checkpoint(checkpoint_path, tmp_dir)
     if "model" not in state:
@@ -142,7 +125,7 @@ def load_model_and_tokenizer_from_dcp(
     model.to(device=device, dtype=dtype).eval()
     n = sum(p.numel() for p in model.parameters())
     print(f"Loaded. {n/1e6:.1f}M params on {device}.")
-    return model, tokenizer, model_type
+    return model, tokenizer
 
 
 # ================================================================
@@ -331,7 +314,7 @@ TASK_CONFIG = {
         "hf_name": "hazyresearch/based-swde",
         "hf_split": "validation",
         "metric_fn": token_f1,
-        "metric_name": "F1",
+        "metric_name": "Accuracy",
     },
     "fda": {
         "hf_name": "hazyresearch/based-fda",
@@ -445,11 +428,70 @@ def evaluate_task(
 
 
 # ================================================================
+# Export
+# ================================================================
+
+def save_json(output_json: str, payload: dict) -> None:
+    Path(output_json).parent.mkdir(parents=True, exist_ok=True)
+    with open(output_json, "w") as f:
+        json.dump(payload, f, indent=2)
+    print(f"Saved JSON results to: {output_json}")
+
+
+def save_csv(output_csv: str, results: list[dict], metadata: dict, summary: dict) -> None:
+    Path(output_csv).parent.mkdir(parents=True, exist_ok=True)
+    fields = [
+        "model_name",
+        "model_type",
+        "checkpoint_path",
+        "model_ref",
+        "task_list",
+        "device",
+        "max_ctx",
+        "max_new_tokens",
+        "max_samples",
+        "generation_backend",
+        "warmup",
+        "profile_generation",
+        "splits",
+        "avg_score",
+        "task",
+        "metric",
+        "score",
+        "n",
+    ]
+    with open(output_csv, "w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=fields)
+        writer.writeheader()
+        for result in results:
+            writer.writerow(
+                {
+                    "model_name": metadata["model_name"],
+                    "model_type": metadata["model_type"],
+                    "checkpoint_path": metadata["checkpoint_path"],
+                    "model_ref": metadata["model_ref"],
+                    "task_list": ",".join(metadata["tasks"]),
+                    "device": metadata["device"],
+                    "max_ctx": metadata["max_ctx"],
+                    "max_new_tokens": metadata["max_new_tokens"],
+                    "max_samples": metadata["max_samples"],
+                    "generation_backend": metadata["generation_backend"],
+                    "warmup": metadata["warmup"],
+                    "profile_generation": metadata["profile_generation"],
+                    "splits": json.dumps(metadata["splits"], sort_keys=True),
+                    "avg_score": summary["avg_score"],
+                    **result,
+                }
+            )
+    print(f"Saved CSV results to: {output_csv}")
+
+
+# ================================================================
 # Main
 # ================================================================
 
 def main():
-    parser = argparse.ArgumentParser(description="Evaluate GLA-family DCP checkpoint on SWDE/FDA/SQUAD")
+    parser = argparse.ArgumentParser(description="Evaluate MS-GLA checkpoint on SWDE/FDA/SQUAD")
     parser.add_argument(
         "--checkpoint_path",
         required=True,
@@ -483,6 +525,16 @@ def main():
         default="cached",
         help="Generation path to use. `cached` uses explicit cached decoding and is the recommended fast path.",
     )
+    parser.add_argument(
+        "--output_json",
+        default=None,
+        help="Optional path to save structured results as JSON",
+    )
+    parser.add_argument(
+        "--output_csv",
+        default=None,
+        help="Optional path to save flat results as CSV",
+    )
     args = parser.parse_args()
 
     tasks = [t.strip().lower() for t in args.tasks.split(",")]
@@ -491,7 +543,7 @@ def main():
             raise ValueError(f"Unknown task '{t}'. Choose from: {list(TASK_CONFIG.keys())}")
 
     checkpoint_path = resolve_checkpoint_path(args.checkpoint_path, args.step)
-    model, tokenizer, model_type = load_model_and_tokenizer_from_dcp(
+    model, tokenizer = load_model_and_tokenizer_from_dcp(
         model_ref=args.model_ref,
         checkpoint_path=checkpoint_path,
         device=args.device,
@@ -532,12 +584,55 @@ def main():
     print("=" * 62)
     print(f"  {'Model':<34} {'Task':<8} {'Metric':<10} {'Score':>6}")
     print("-" * 62)
-    model_name = Path(args.model_ref).name or model_type
+    model_name = Path(args.model_ref).name or "msgla"
     for r in results:
         print(f"  {model_name:<34} {r['task'].upper():<8} {r['metric']:<10} {r['score']:>6.2f}")
     print("-" * 62)
     print(f"  {'Average':<52} {avg:>6.2f}")
     print("=" * 62)
+
+    model_type = "ms_gla"
+    payload = {
+        "created_at_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "model_name": model_name,
+        "model_type": model_type,
+        "checkpoint_path": checkpoint_path,
+        "model_ref": args.model_ref,
+        "device": args.device,
+        "tasks": tasks,
+        "max_ctx": args.max_ctx,
+        "max_new_tokens": args.max_new_tokens,
+        "max_samples": args.max_samples,
+        "generation_backend": args.generation_backend,
+        "warmup": args.warmup,
+        "profile_generation": args.profile_generation,
+        "splits": {task_name: TASK_CONFIG[task_name]["hf_split"] for task_name in tasks},
+        "summary": {"avg_score": avg},
+        "results": results,
+    }
+    if args.output_json:
+        save_json(args.output_json, payload)
+    if args.output_csv:
+        save_csv(
+            args.output_csv,
+            results,
+            metadata={
+                "model_name": model_name,
+                "model_type": model_type,
+                "checkpoint_path": checkpoint_path,
+                "model_ref": args.model_ref,
+                "tasks": tasks,
+                "device": args.device,
+                "max_ctx": args.max_ctx,
+                "max_new_tokens": args.max_new_tokens,
+                "max_samples": args.max_samples,
+                "generation_backend": args.generation_backend,
+                "warmup": args.warmup,
+                "profile_generation": args.profile_generation,
+                "splits": payload["splits"],
+            },
+            summary=payload["summary"],
+        )
 
 
 if __name__ == "__main__":
