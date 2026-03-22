@@ -1,7 +1,7 @@
 """
 eval_entity_tracking.py — Multi-entity tracking probe for GLA-family checkpoints.
 
-Tests whether a model's recurrent state can simultaneously track three named entities
+Tests whether a model's recurrent state can simultaneously track multiple named entities
 that update at different rates across a long context window. Both models were trained
 at 2k context — queries are placed in the OOD region (>2k tokens) to stress long-range
 memory under out-of-distribution conditions.
@@ -13,24 +13,28 @@ MS-GLA with [1, 2, 4] scales has three branches:
   - Scale 2 (mid)    : aggregates over spans, ~200-token effective horizon
   - Scale 4 (coarse) : temporally pooled, ~800-token effective horizon
 
-GLA has a single scale-1 branch that must track all three entity types with the
-same state. Prediction: MS-GLA outperforms GLA most on Entity C (slowest updates),
-moderately on B, least on A.
+GLA has a single scale-1 branch that must track all entity types with the same
+state. Prediction: MS-GLA outperforms GLA most on the slowest entities, moderately
+on mid-rate ones, and least on the fastest one.
 
 Entity design
 -------------
   Entity A "score"  : integer 1-99,  updates every FREQ_A tokens (~50)   [fine branch]
   Entity B "rank"   : integer 1-20,  updates every FREQ_B tokens (~200)  [mid branch]
   Entity C "code"   : word,          updates every FREQ_C tokens (~800)   [coarse branch]
+  Entity D "status" : word,          updates every FREQ_D tokens (~1600)  [extra coarse]
+  Entity E "signal" : word,          updates every FREQ_E tokens (~3200)  [extra coarse]
 
 Sequence structure
 ------------------
-  [intro]   "Alice's score is X. Bob's rank is Y. Carol's code is Z."
+  [intro]   one sentence per entity with the current value
   [body]    filler text with entity updates injected at their respective frequencies
   [queries] placed at query_gap tokens from start (OOD region):
             "What is Alice's score?" -> score NLL of answer
             "What is Bob's rank?"    -> score NLL of answer
             "What is Carol's code?"  -> score NLL of answer
+            "What is Dylan's status?" -> score NLL of answer
+            "What is Eve's signal?"   -> score NLL of answer
 
 Metric
 ------
@@ -102,9 +106,11 @@ MODEL_REGISTRY = {
 # Entity configuration — frequencies map to MS-GLA branch scales
 # ================================================================
 
-FREQ_A = 50     # fast  — scale-1 branch handles this, both models similar
-FREQ_B = 200    # mid   — scale-2 branch specialises here, MS-GLA advantage
-FREQ_C = 800    # slow  — scale-4 branch specialises here, largest MS-GLA advantage
+FREQ_A = 50      # fast       — scale-1 branch handles this, both models similar
+FREQ_B = 200     # mid        — scale-2 branch specialises here, MS-GLA advantage
+FREQ_C = 800     # coarse     — scale-4 branch specialises here
+FREQ_D = 1600    # coarser    — extra long-range stress test
+FREQ_E = 3200    # coarsest   — extra long-range stress test
 
 SCORE_VALUES = list(range(1, 100))       # Entity A: integer score
 RANK_VALUES  = list(range(1, 21))        # Entity B: integer rank
@@ -114,14 +120,61 @@ CODE_VALUES  = [                         # Entity C: single-token code words
     "PHOENIX", "NEXUS", "COBALT", "VORTEX", "ZENITH",
     "AXIOM", "HELIOS", "CYGNUS", "BOREAL", "STRATUM",
 ]
+STATUS_VALUES = [                       # Entity D: status words
+    "ACTIVE", "IDLE", "READY", "HIDDEN", "STABLE",
+    "PRIME", "LUCID", "STEADY", "AMBER", "SCARLET",
+    "SILVER", "GOLD", "FROST", "EMBER", "RAPID",
+    "MELLOW", "BRISK", "SOLID", "CLEAR", "QUIET",
+]
+SIGNAL_VALUES = [                       # Entity E: signal words
+    "AURORA", "PULSAR", "QUASAR", "RADAR", "BEACON",
+    "VECTOR", "ORBIT", "NOVA", "COMET", "SOLAR",
+    "LUNAR", "COSMOS", "PRISM", "SONIC", "IONIC",
+    "ATLAS", "LYRIC", "MATRIX", "NEBULA", "APEX",
+]
 
-INTRO_TEMPLATE = "Alice's score is {score}. Bob's rank is {rank}. Carol's code is {code}. "
-UPDATE_A = "Alice's score is updated to {val}. "
-UPDATE_B = "Bob's rank is updated to {val}. "
-UPDATE_C = "Carol's code is updated to {val}. "
-QUERY_A  = "What is Alice's score? "
-QUERY_B  = "What is Bob's rank? "
-QUERY_C  = "What is Carol's code? "
+ENTITY_SPECS = [
+    {
+        "key": "A",
+        "subject": "Alice",
+        "attribute": "score",
+        "freq": FREQ_A,
+        "values": SCORE_VALUES,
+        "band": "fast",
+    },
+    {
+        "key": "B",
+        "subject": "Bob",
+        "attribute": "rank",
+        "freq": FREQ_B,
+        "values": RANK_VALUES,
+        "band": "mid",
+    },
+    {
+        "key": "C",
+        "subject": "Carol",
+        "attribute": "code",
+        "freq": FREQ_C,
+        "values": CODE_VALUES,
+        "band": "coarse",
+    },
+    {
+        "key": "D",
+        "subject": "Dylan",
+        "attribute": "status",
+        "freq": FREQ_D,
+        "values": STATUS_VALUES,
+        "band": "coarser",
+    },
+    {
+        "key": "E",
+        "subject": "Eve",
+        "attribute": "signal",
+        "freq": FREQ_E,
+        "values": SIGNAL_VALUES,
+        "band": "coarsest",
+    },
+]
 
 
 # ================================================================
@@ -240,11 +293,23 @@ def answer_ids(tokenizer, value) -> list[int]:
     return tokenizer.encode(f" {value}", add_special_tokens=False)
 
 
+def entity_state_text(spec: dict, value) -> str:
+    return f"{spec['subject']}'s {spec['attribute']} is {value}. "
+
+
+def entity_update_text(spec: dict, value) -> str:
+    return f"{spec['subject']}'s {spec['attribute']} is updated to {value}. "
+
+
+def entity_query_text(spec: dict) -> str:
+    return f"What is {spec['subject']}'s {spec['attribute']}? "
+
+
 def build_sequence(
     tokenizer,
     filler: list[int],
     filler_offset: int,
-    init_a: int, init_b: int, init_c: str,
+    initial_values: dict[str, object],
     query_gap: int,
     rng: random.Random,
 ) -> dict:
@@ -253,9 +318,10 @@ def build_sequence(
 
     Returns a dict containing:
       tokens          : full token ID list
-      final_a/b/c     : ground-truth final values at query time
-      ans_start/end_* : token positions of each answer in tokens
-      ans_ids_*       : token IDs of each correct answer
+      final_<entity>  : ground-truth final values at query time
+      <entity>_start  : token positions of each answer in tokens
+      <entity>_end    : token positions of each answer in tokens
+      <entity>_ids    : token IDs of each correct answer
     """
     fil     = filler[filler_offset:]
     fil_ptr = [0]   # mutable so inner function can update it
@@ -272,60 +338,43 @@ def build_sequence(
     tokens: list[int] = []
 
     # Intro
-    tokens.extend(enc(tokenizer, INTRO_TEMPLATE.format(
-        score=init_a, rank=init_b, code=init_c
-    )))
+    for spec in ENTITY_SPECS:
+        tokens.extend(enc(tokenizer, entity_state_text(spec, initial_values[spec["key"]])))
 
-    cur_a, cur_b, cur_c = init_a, init_b, init_c
+    current_values = {spec["key"]: initial_values[spec["key"]] for spec in ENTITY_SPECS}
 
     # Body: inject updates at their frequencies, fill gaps with corpus
     body_target  = query_gap
     tok_in_body  = 0
-    next_a = FREQ_A
-    next_b = FREQ_B
-    next_c = FREQ_C
+    next_due = {spec["key"]: spec["freq"] for spec in ENTITY_SPECS}
 
     while tok_in_body < body_target:
         # Advance to the next event (or end of body)
-        step = min(next_a, next_b, next_c, body_target - tok_in_body)
+        step = min(*next_due.values(), body_target - tok_in_body)
         step = max(step, 1)
 
         chunk = next_filler(step)
         tokens.extend(chunk)
         tok_in_body += len(chunk)
-        next_a -= len(chunk)
-        next_b -= len(chunk)
-        next_c -= len(chunk)
+        for key in next_due:
+            next_due[key] -= len(chunk)
 
         if tok_in_body >= body_target:
             break
 
         # Fire updates that are due
-        if next_a <= 0:
-            new_a = rng.choice([v for v in SCORE_VALUES if v != cur_a])
-            upd   = enc(tokenizer, UPDATE_A.format(val=new_a))
-            tokens.extend(upd)
-            tok_in_body += len(upd)
-            cur_a  = new_a
-            next_a = FREQ_A
+        for spec in ENTITY_SPECS:
+            key = spec["key"]
+            if next_due[key] <= 0:
+                cur_val = current_values[key]
+                new_val = rng.choice([v for v in spec["values"] if v != cur_val])
+                upd = enc(tokenizer, entity_update_text(spec, new_val))
+                tokens.extend(upd)
+                tok_in_body += len(upd)
+                current_values[key] = new_val
+                next_due[key] = spec["freq"]
 
-        if next_b <= 0:
-            new_b = rng.choice([v for v in RANK_VALUES if v != cur_b])
-            upd   = enc(tokenizer, UPDATE_B.format(val=new_b))
-            tokens.extend(upd)
-            tok_in_body += len(upd)
-            cur_b  = new_b
-            next_b = FREQ_B
-
-        if next_c <= 0:
-            new_c = rng.choice([v for v in CODE_VALUES if v != cur_c])
-            upd   = enc(tokenizer, UPDATE_C.format(val=new_c))
-            tokens.extend(upd)
-            tok_in_body += len(upd)
-            cur_c  = new_c
-            next_c = FREQ_C
-
-    # Queries — append all three, record where each answer sits
+    # Queries — append all entity questions, record where each answer sits
     def append_query(query_text: str, value) -> tuple[int, int, list[int]]:
         tokens.extend(enc(tokenizer, query_text))
         ids   = answer_ids(tokenizer, value)
@@ -335,17 +384,17 @@ def build_sequence(
         tokens.extend(enc(tokenizer, " "))   # separator
         return start, end, ids
 
-    a_start, a_end, a_ids = append_query(QUERY_A, cur_a)
-    b_start, b_end, b_ids = append_query(QUERY_B, cur_b)
-    c_start, c_end, c_ids = append_query(QUERY_C, cur_c)
+    result = {"tokens": tokens}
+    for spec in ENTITY_SPECS:
+        key = spec["key"]
+        lower = key.lower()
+        start, end, ids = append_query(entity_query_text(spec), current_values[key])
+        result[f"final_{lower}"] = current_values[key]
+        result[f"{lower}_start"] = start
+        result[f"{lower}_end"] = end
+        result[f"{lower}_ids"] = ids
 
-    return {
-        "tokens":    tokens,
-        "final_a":   cur_a, "final_b": cur_b, "final_c": cur_c,
-        "a_start":   a_start, "a_end": a_end, "a_ids": a_ids,
-        "b_start":   b_start, "b_end": b_end, "b_ids": b_ids,
-        "c_start":   c_start, "c_end": c_end, "c_ids": c_ids,
-    }
+    return result
 
 
 # ================================================================
@@ -353,17 +402,11 @@ def build_sequence(
 # ================================================================
 
 @torch.inference_mode()
-def forward_nll(
+def forward_logits(
     model,
     tokens: list[int],
-    score_spans: list[tuple[int, int, list[int]]],
     device: str,
-) -> list[float]:
-    """
-    Single forward pass. For each (start, end, ids) in score_spans,
-    return mean NLL of ids at positions start..end-1.
-    ids may differ from tokens[start:end] — this lets us score wrong answers.
-    """
+) -> torch.Tensor:
     ids_t     = torch.tensor(tokens, dtype=torch.long, device=device).unsqueeze(0)
     attn_mask = torch.ones_like(ids_t, device=device)
 
@@ -373,8 +416,19 @@ def forward_nll(
         use_cache=True,
         past_key_values=None,
     )
-    logits = outputs.logits[0]   # [T, vocab]
+    return outputs.logits[0]   # [T, vocab]
 
+
+def score_spans_from_logits(
+    logits: torch.Tensor,
+    tokens: list[int],
+    score_spans: list[tuple[int, int, list[int]]],
+) -> list[float]:
+    """
+    For each (start, end, ids) in score_spans, return mean NLL of ids at
+    positions start..end-1. ids may differ from tokens[start:end] — this lets
+    us score wrong answers at the same positions.
+    """
     results: list[float] = []
     for start, end, score_ids in score_spans:
         if not score_ids or start == 0:
@@ -392,23 +446,9 @@ def forward_nll(
     return results
 
 
-@torch.inference_mode()
-def top1_at(
-    model,
-    tokens: list[int],
-    pred_pos: int,
-    device: str,
-) -> int:
+def top1_from_logits(logits: torch.Tensor, pred_pos: int) -> int:
     """Return argmax prediction at pred_pos (i.e. what follows tokens[:pred_pos])."""
-    ids_t     = torch.tensor(tokens, dtype=torch.long, device=device).unsqueeze(0)
-    attn_mask = torch.ones_like(ids_t, device=device)
-    outputs   = model(
-        input_ids=ids_t,
-        attention_mask=attn_mask,
-        use_cache=True,
-        past_key_values=None,
-    )
-    return int(outputs.logits[0, pred_pos - 1].argmax().item())
+    return int(logits[pred_pos - 1].argmax().item())
 
 
 # ================================================================
@@ -427,80 +467,79 @@ def evaluate_gap(
 ) -> dict:
     rng = random.Random(seed)
 
-    ret_a: list[float] = []
-    ret_b: list[float] = []
-    ret_c: list[float] = []
-    em_a:  list[int]   = []
-    em_b:  list[int]   = []
-    em_c:  list[int]   = []
+    ret = {spec["key"]: [] for spec in ENTITY_SPECS}
+    em  = {spec["key"]: [] for spec in ENTITY_SPECS}
 
     print(f"\n{'─' * 68}")
     print(f"  Query gap : {query_gap} tokens")
-    print(f"  Frequencies — A:{FREQ_A}  B:{FREQ_B}  C:{FREQ_C}")
+    freq_text = "  ".join(f"{spec['key']}:{spec['freq']}" for spec in ENTITY_SPECS)
+    print(f"  Frequencies — {freq_text}")
     print(f"{'─' * 68}")
 
     t_start = time.perf_counter()
 
     for i in range(n_probes):
-        init_a = rng.choice(SCORE_VALUES)
-        init_b = rng.choice(RANK_VALUES)
-        init_c = rng.choice(CODE_VALUES)
-        foff   = rng.randint(0, max(1, len(filler) - query_gap - 2000))
+        initial_values = {
+            spec["key"]: rng.choice(spec["values"])
+            for spec in ENTITY_SPECS
+        }
+        foff = rng.randint(0, max(1, len(filler) - query_gap - 2000))
 
         seq = build_sequence(
             tokenizer, filler, foff,
-            init_a, init_b, init_c,
+            initial_values,
             query_gap, rng,
         )
         tokens = seq["tokens"]
 
         # Correct answer spans
-        correct_spans = [
-            (seq["a_start"], seq["a_end"], seq["a_ids"]),
-            (seq["b_start"], seq["b_end"], seq["b_ids"]),
-            (seq["c_start"], seq["c_end"], seq["c_ids"]),
-        ]
+        correct_spans = []
+        for spec in ENTITY_SPECS:
+            lower = spec["key"].lower()
+            correct_spans.append(
+                (seq[f"{lower}_start"], seq[f"{lower}_end"], seq[f"{lower}_ids"])
+            )
 
         # Wrong answer spans — same positions, wrong value IDs
-        wrong_a = rng.choice([v for v in SCORE_VALUES if v != seq["final_a"]])
-        wrong_b = rng.choice([v for v in RANK_VALUES  if v != seq["final_b"]])
-        wrong_c = rng.choice([v for v in CODE_VALUES  if v != seq["final_c"]])
+        wrong_spans = []
+        for spec in ENTITY_SPECS:
+            lower = spec["key"].lower()
+            wrong_value = rng.choice(
+                [v for v in spec["values"] if v != seq[f"final_{lower}"]]
+            )
+            wrong_spans.append(
+                (
+                    seq[f"{lower}_start"],
+                    seq[f"{lower}_end"],
+                    answer_ids(tokenizer, wrong_value),
+                )
+            )
 
-        wrong_spans = [
-            (seq["a_start"], seq["a_end"], answer_ids(tokenizer, wrong_a)),
-            (seq["b_start"], seq["b_end"], answer_ids(tokenizer, wrong_b)),
-            (seq["c_start"], seq["c_end"], answer_ids(tokenizer, wrong_c)),
-        ]
-
-        # Two forward passes: one for correct NLL, one for wrong NLL
-        correct_nlls = forward_nll(model, tokens, correct_spans, device)
-        wrong_nlls   = forward_nll(model, tokens, wrong_spans,   device)
-
-        # Exact match: does top-1 at each query position == correct answer?
-        t1_a = top1_at(model, tokens, seq["a_start"], device)
-        t1_b = top1_at(model, tokens, seq["b_start"], device)
-        t1_c = top1_at(model, tokens, seq["c_start"], device)
+        logits = forward_logits(model, tokens, device)
+        correct_nlls = score_spans_from_logits(logits, tokens, correct_spans)
+        wrong_nlls   = score_spans_from_logits(logits, tokens, wrong_spans)
 
         # Accumulate
-        for nlls_c, nlls_w, ret_list in [
-            (correct_nlls[0], wrong_nlls[0], ret_a),
-            (correct_nlls[1], wrong_nlls[1], ret_b),
-            (correct_nlls[2], wrong_nlls[2], ret_c),
-        ]:
+        for idx, spec in enumerate(ENTITY_SPECS):
+            key = spec["key"]
+            lower = key.lower()
+            nlls_c = correct_nlls[idx]
+            nlls_w = wrong_nlls[idx]
             if not (math.isnan(nlls_c) or math.isnan(nlls_w)):
-                ret_list.append(nlls_w - nlls_c)
+                ret[key].append(nlls_w - nlls_c)
 
-        em_a.append(int(t1_a == seq["a_ids"][0]) if seq["a_ids"] else 0)
-        em_b.append(int(t1_b == seq["b_ids"][0]) if seq["b_ids"] else 0)
-        em_c.append(int(t1_c == seq["c_ids"][0]) if seq["c_ids"] else 0)
+            pred = top1_from_logits(logits, seq[f"{lower}_start"])
+            em[key].append(int(pred == seq[f"{lower}_ids"][0]) if seq[f"{lower}_ids"] else 0)
 
         if verbose and (i + 1) % 20 == 0:
             elapsed = time.perf_counter() - t_start
             def _m(lst): return sum(lst)/len(lst) if lst else float("nan")
+            ret_text = "  ".join(f"ret {k}={_m(ret[k]):.3f}" for k in ret)
+            em_text = "  ".join(f"EM {k}={_m(em[k])*100:.1f}%" for k in em)
             print(
                 f"  [{i+1:4d}/{n_probes}]  "
-                f"ret A={_m(ret_a):.3f}  B={_m(ret_b):.3f}  C={_m(ret_c):.3f}  "
-                f"EM A={_m(em_a)*100:.1f}%  B={_m(em_b)*100:.1f}%  C={_m(em_c)*100:.1f}%  "
+                f"{ret_text}  "
+                f"{em_text}  "
                 f"t={elapsed:.1f}s",
                 flush=True,
             )
@@ -508,22 +547,25 @@ def evaluate_gap(
     def _mean(lst): return sum(lst)/len(lst) if lst else float("nan")
     def _pct(lst):  return _mean(lst) * 100
 
-    result = {
-        "query_gap": query_gap,
-        "n_probes":  n_probes,
-        "ret_A":     _mean(ret_a),  "ret_B": _mean(ret_b),  "ret_C": _mean(ret_c),
-        "em_A":      _pct(em_a),    "em_B":  _pct(em_b),    "em_C":  _pct(em_c),
-    }
+    result = {"query_gap": query_gap, "n_probes": n_probes}
+    for spec in ENTITY_SPECS:
+        key = spec["key"]
+        result[f"ret_{key}"] = _mean(ret[key])
+        result[f"em_{key}"] = _pct(em[key])
 
-    print(f"\n  {'Entity':<10}  {'Freq':>6}  {'Retention NLL':>14}  {'Exact match':>12}")
-    print(f"  {'-'*10}  {'-'*6}  {'-'*14}  {'-'*12}")
-    for label, freq, ret, em in [
-        ("A (fast)",  FREQ_A, result["ret_A"], result["em_A"]),
-        ("B (mid)",   FREQ_B, result["ret_B"], result["em_B"]),
-        ("C (slow)",  FREQ_C, result["ret_C"], result["em_C"]),
-    ]:
-        flag = "  **" if ret > 0.5 else ("  *" if ret > 0.1 else "")
-        print(f"  {label:<10}  {freq:>6}  {ret:>14.4f}{flag}  {em:>11.1f}%")
+    label_width = 16
+    print(f"\n  {'Entity':<{label_width}}  {'Freq':>6}  {'Retention NLL':>14}  {'Exact match':>12}")
+    print(f"  {'-'*label_width}  {'-'*6}  {'-'*14}  {'-'*12}")
+    for spec in ENTITY_SPECS:
+        key = spec["key"]
+        ret_val = result[f"ret_{key}"]
+        em_val = result[f"em_{key}"]
+        label = f"{key} ({spec['band']})"
+        flag = "  **" if ret_val > 0.5 else ("  *" if ret_val > 0.1 else "")
+        print(
+            f"  {label:<{label_width}}  "
+            f"{spec['freq']:>6}  {ret_val:>14.4f}{flag}  {em_val:>11.1f}%"
+        )
 
     return result
 
@@ -538,40 +580,42 @@ def print_summary(results: list[dict], model_type: str) -> None:
     print("=" * 80)
     print("  retention_NLL = NLL(wrong) - NLL(correct)  "
           "[>0 = model knows correct value]")
-    print(f"  A updates every {FREQ_A} tok  |  B every {FREQ_B} tok  |  C every {FREQ_C} tok")
+    freq_line = "  |  ".join(
+        f"{spec['key']} every {spec['freq']} tok" for spec in ENTITY_SPECS
+    )
+    print(f"  {freq_line}")
     print()
 
     gaps = [r["query_gap"] for r in results]
+    row_label_width = 20
     col  = 10
 
     def _row(label, key):
         vals = "  ".join(f"{r[key]:>{col}.4f}" for r in results)
-        print(f"  {label:<14}  {vals}")
+        print(f"  {label:<{row_label_width}}  {vals}")
 
     def _pct_row(label, key):
         vals = "  ".join(f"{r[key]:>{col-1}.1f}%" for r in results)
-        print(f"  {label:<14}  {vals}")
+        print(f"  {label:<{row_label_width}}  {vals}")
 
-    header = f"  {'':14}  " + "  ".join(f"{'gap='+str(g):>{col}}" for g in gaps)
+    header = f"  {'':{row_label_width}}  " + "  ".join(f"{'gap='+str(g):>{col}}" for g in gaps)
     print(header)
     print("  " + "─" * (len(header) - 2))
-    _row("ret A (fast)",  "ret_A")
-    _row("ret B (mid)",   "ret_B")
-    _row("ret C (slow)",  "ret_C")
+    for spec in ENTITY_SPECS:
+        _row(f"ret {spec['key']} ({spec['band']})", f"ret_{spec['key']}")
     print()
     print(header)
     print("  " + "─" * (len(header) - 2))
-    _pct_row("EM%  A (fast)", "em_A")
-    _pct_row("EM%  B (mid)",  "em_B")
-    _pct_row("EM%  C (slow)", "em_C")
+    for spec in ENTITY_SPECS:
+        _pct_row(f"EM% {spec['key']} ({spec['band']})", f"em_{spec['key']}")
 
     print("=" * 80)
     print("\nComparing GLA vs MS-GLA:")
-    print("  * ret_A should be similar — both models fine branch handles fast updates.")
-    print("  * ret_B gap should be moderate — scale-2 branch advantage.")
-    print("  * ret_C gap should be largest — scale-4 coarse branch advantage.")
-    print("  * If ret_C > 0 for MS-GLA but ~0 for GLA at gaps >4k, that is direct")
-    print("    evidence that multi-resolution decomposition improves temporal memory.")
+    print("  * ret_A should remain the easiest local-memory case.")
+    print("  * ret_B should show a moderate branch-specialization advantage.")
+    print("  * ret_C/ret_D/ret_E are the main coarse-memory stress tests.")
+    print("  * If MS-GLA stays >0 on D/E at long gaps while GLA collapses toward 0,")
+    print("    that is direct evidence that multi-resolution decomposition helps.")
 
 
 # ================================================================
@@ -580,8 +624,10 @@ def print_summary(results: list[dict], model_type: str) -> None:
 
 def save_csv(output_csv: str, results: list[dict], model_type: str) -> None:
     Path(output_csv).parent.mkdir(parents=True, exist_ok=True)
-    fields = ["model_type", "query_gap", "n_probes",
-              "ret_A", "ret_B", "ret_C", "em_A", "em_B", "em_C"]
+    fields = ["model_type", "query_gap", "n_probes"]
+    for prefix in ("ret", "em"):
+        for spec in ENTITY_SPECS:
+            fields.append(f"{prefix}_{spec['key']}")
     with open(output_csv, "w", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=fields)
         writer.writeheader()
@@ -642,7 +688,8 @@ def main() -> None:
     print(f"Model type  : {model_type}")
     print(f"Query gaps  : {query_gaps}")
     print(f"n_probes    : {args.n_probes} per gap")
-    print(f"Freqs       : A={FREQ_A}  B={FREQ_B}  C={FREQ_C}")
+    freq_text = "  ".join(f"{spec['key']}={spec['freq']}" for spec in ENTITY_SPECS)
+    print(f"Freqs       : {freq_text}")
 
     filler = load_filler_pool(
         tokenizer,
