@@ -21,7 +21,9 @@ Examples:
 """
 
 import argparse
+import csv
 import io
+import json
 import math
 import os
 import re
@@ -585,6 +587,102 @@ def evaluate_winogrande(
 
 
 # ================================================================
+# Export
+# ================================================================
+
+def summarize_results(results: list[dict]) -> dict:
+    avg_score_metrics = [r["score"] for r in results if r["higher_is_better"]]
+    avg_ppl_metrics = [r["score"] for r in results if not r["higher_is_better"]]
+    return {
+        "avg_score": sum(avg_score_metrics) / len(avg_score_metrics) if avg_score_metrics else 0.0,
+        "avg_ppl": sum(avg_ppl_metrics) / len(avg_ppl_metrics) if avg_ppl_metrics else None,
+    }
+
+
+def _sanitize_output_token(value: str) -> str:
+    cleaned = re.sub(r"[^A-Za-z0-9._-]+", "-", value.strip())
+    cleaned = cleaned.strip("-_.")
+    return cleaned or "run"
+
+
+def default_output_paths(
+    script_dir: str,
+    model_name: str,
+    checkpoint_path: str,
+    tasks: list[str],
+    supported_tasks: set[str],
+) -> tuple[str, str]:
+    output_dir = Path(script_dir) / "results" / "benchmarks"
+    checkpoint_label = _sanitize_output_token(Path(checkpoint_path).stem if Path(checkpoint_path).is_file()
+                                              else Path(checkpoint_path).name)
+    task_label = "full" if set(tasks) == supported_tasks else _sanitize_output_token("-".join(tasks))
+    stem = f"{_sanitize_output_token(model_name)}_{checkpoint_label}_{task_label}"
+    return str(output_dir / f"{stem}.json"), str(output_dir / f"{stem}.csv")
+
+
+def _json_safe(value):
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
+    if isinstance(value, dict):
+        return {k: _json_safe(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_json_safe(v) for v in value]
+    return value
+
+
+def save_json(output_json: str, payload: dict) -> None:
+    Path(output_json).parent.mkdir(parents=True, exist_ok=True)
+    with open(output_json, "w") as f:
+        json.dump(_json_safe(payload), f, indent=2, allow_nan=False)
+    print(f"Saved JSON results to: {output_json}")
+
+
+def save_csv(output_csv: str, results: list[dict], metadata: dict, summary: dict) -> None:
+    Path(output_csv).parent.mkdir(parents=True, exist_ok=True)
+    fields = [
+        "model_name",
+        "model_type",
+        "checkpoint_path",
+        "model_ref",
+        "task_list",
+        "device",
+        "max_ctx",
+        "stride",
+        "max_samples",
+        "splits",
+        "avg_score",
+        "avg_ppl",
+        "task",
+        "metric",
+        "score",
+        "n",
+        "higher_is_better",
+    ]
+    with open(output_csv, "w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=fields)
+        writer.writeheader()
+        for result in results:
+            writer.writerow(
+                {
+                    "model_name": metadata["model_name"],
+                    "model_type": metadata["model_type"],
+                    "checkpoint_path": metadata["checkpoint_path"],
+                    "model_ref": metadata["model_ref"],
+                    "task_list": ",".join(metadata["tasks"]),
+                    "device": metadata["device"],
+                    "max_ctx": metadata["max_ctx"],
+                    "stride": metadata["stride"],
+                    "max_samples": metadata["max_samples"],
+                    "splits": json.dumps(metadata["splits"], sort_keys=True),
+                    "avg_score": summary["avg_score"],
+                    "avg_ppl": summary["avg_ppl"],
+                    **result,
+                }
+            )
+    print(f"Saved CSV results to: {output_csv}")
+
+
+# ================================================================
 # Main
 # ================================================================
 
@@ -633,6 +731,16 @@ def main():
     parser.add_argument("--hellaswag_split", default="validation")
     parser.add_argument("--winogrande_split", default="validation")
     parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
+    parser.add_argument(
+        "--output_json",
+        default=None,
+        help="Path to save structured benchmark results as JSON (default: auto-generated under results/benchmarks)",
+    )
+    parser.add_argument(
+        "--output_csv",
+        default=None,
+        help="Path to save flat benchmark results as CSV (default: auto-generated under results/benchmarks)",
+    )
     args = parser.parse_args()
 
     if args.max_ctx < 2:
@@ -717,17 +825,17 @@ def main():
                 )
             )
 
-    avg_score_metrics = [r["score"] for r in results if r["higher_is_better"]]
-    avg_ppl_metrics = [r["score"] for r in results if not r["higher_is_better"]]
-    avg_score = sum(avg_score_metrics) / len(avg_score_metrics) if avg_score_metrics else 0.0
-    avg_ppl = sum(avg_ppl_metrics) / len(avg_ppl_metrics) if avg_ppl_metrics else float("nan")
+    model_type = "ms_gla"
+    model_name = Path(args.model_ref).name or model_type
+    summary = summarize_results(results)
+    avg_score = summary["avg_score"]
+    avg_ppl = summary["avg_ppl"]
 
     print("\n" + "=" * 76)
     print("  RESULTS SUMMARY")
     print("=" * 76)
     print(f"  {'Model':<26} {'Task':<12} {'Metric':<10} {'Score':>12} {'N':>10}")
     print("-" * 76)
-    model_name = Path(args.model_ref).name or "msgla"
     for r in results:
         if r["metric"] == "ppl":
             score_text = f"{r['score']:.4f}"
@@ -736,13 +844,65 @@ def main():
         print(f"  {model_name:<26} {r['task']:<12} {r['metric']:<10} {score_text:>12} {r['n']:>10,}")
     print("-" * 76)
     print(f"  {'Average Score (acc/acc_norm)':<50} {avg_score:>12.2f}")
-    if avg_ppl == avg_ppl:
+    if avg_ppl is not None:
         print(f"  {'Average PPL (ppl metrics)':<50} {avg_ppl:>12.4f}")
     print("=" * 76)
 
     one_liner = " | ".join(f"{r['task']}:{r['metric']}={r['score']:.4f}" if r["metric"] == "ppl" else
                            f"{r['task']}:{r['metric']}={r['score']:.2f}" for r in results)
     print(f"\nOne-liner: {model_name} >> {one_liner} >> AvgScore={avg_score:.2f}\n")
+
+    output_json, output_csv = args.output_json, args.output_csv
+    if output_json is None or output_csv is None:
+        default_json, default_csv = default_output_paths(
+            script_dir=SCRIPT_DIR,
+            model_name=model_name,
+            checkpoint_path=checkpoint_path,
+            tasks=tasks,
+            supported_tasks=supported,
+        )
+        output_json = output_json or default_json
+        output_csv = output_csv or default_csv
+
+    payload = {
+        "created_at_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "model_name": model_name,
+        "model_type": model_type,
+        "checkpoint_path": checkpoint_path,
+        "model_ref": args.model_ref,
+        "device": args.device,
+        "tasks": tasks,
+        "max_ctx": args.max_ctx,
+        "stride": stride,
+        "max_samples": args.max_samples,
+        "splits": {
+            "wikitext": args.wikitext_split,
+            "lambada": args.lambada_split,
+            "piqa": args.piqa_split,
+            "hellaswag": args.hellaswag_split,
+            "winogrande": args.winogrande_split,
+        },
+        "summary": summary,
+        "results": results,
+    }
+    save_json(output_json, payload)
+    save_csv(
+        output_csv,
+        results,
+        metadata={
+            "model_name": model_name,
+            "model_type": model_type,
+            "checkpoint_path": checkpoint_path,
+            "model_ref": args.model_ref,
+            "tasks": tasks,
+            "device": args.device,
+            "max_ctx": args.max_ctx,
+            "stride": stride,
+            "max_samples": args.max_samples,
+            "splits": payload["splits"],
+        },
+        summary=summary,
+    )
 
 
 if __name__ == "__main__":
