@@ -427,7 +427,7 @@ class MultiScaleGatedLinearAttention(nn.Module):
         decode_state: MSGLADecodeState,
     ) -> torch.Tensor:
         batch_size, seq_len, _ = hidden_states.shape
-        token_outputs = [[] for _ in range(seq_len)]
+        branch_outputs = []
 
         for branch_idx, (scale, branch) in enumerate(zip(self.scales, self.branches)):
             branch_batch_output = hidden_states.new_zeros(batch_size, seq_len, self.hidden_size)
@@ -470,22 +470,15 @@ class MultiScaleGatedLinearAttention(nn.Module):
 
                 branch_batch_output[batch_idx, valid_positions] = valid_output
 
-            for token_idx in range(seq_len):
-                token_outputs[token_idx].append(branch_batch_output[:, token_idx])
+            branch_outputs.append(branch_batch_output)
 
-        outputs = []
-        for token_idx in range(seq_len):
-            stacked = torch.stack(token_outputs[token_idx], dim=1)
-            token_hidden = hidden_states[:, token_idx]
-            if self.fuse_mode == "softmax":
-                branch_weights = torch.softmax(self.fuse(token_hidden), dim=-1)
-                fused = (stacked * branch_weights.unsqueeze(-1)).sum(dim=1)
-            else:
-                fused = stacked.mean(dim=1)
-            fused = fused * current_mask[:, token_idx].to(fused.dtype).unsqueeze(-1)
-            outputs.append(fused)
-
-        return torch.stack(outputs, dim=1)
+        stacked = torch.stack(branch_outputs, dim=2)
+        if self.fuse_mode == "softmax":
+            branch_weights = torch.softmax(self.fuse(hidden_states), dim=-1)
+            output = (stacked * branch_weights.unsqueeze(-1)).sum(dim=2)
+        else:
+            output = stacked.mean(dim=2)
+        return output * current_mask.to(output.dtype).unsqueeze(-1)
 
     def _decode_tokens_with_cache(
         self,
