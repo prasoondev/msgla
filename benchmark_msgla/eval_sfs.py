@@ -314,7 +314,7 @@ TASK_CONFIG = {
         "hf_name": "hazyresearch/based-swde",
         "hf_split": "validation",
         "metric_fn": token_f1,
-        "metric_name": "Accuracy",
+        "metric_name": "F1",
     },
     "fda": {
         "hf_name": "hazyresearch/based-fda",
