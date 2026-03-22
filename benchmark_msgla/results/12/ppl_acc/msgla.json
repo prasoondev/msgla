@@ -1,0 +1,73 @@
+{
+  "created_at_utc": "2026-03-22T19:58:50Z",
+  "model_name": "benchmark_msgla",
+  "model_type": "ms_gla",
+  "checkpoint_path": "checkpoint/12/step-68664/tmp/68k.pt",
+  "model_ref": "/home/prasoon/Documents/research/msgla/benchmark_msgla",
+  "device": "cuda",
+  "tasks": [
+    "wikitext",
+    "lambada",
+    "piqa",
+    "hellaswag",
+    "winogrande"
+  ],
+  "max_ctx": 2048,
+  "stride": 1024,
+  "max_samples": null,
+  "splits": {
+    "wikitext": "test",
+    "lambada": "test",
+    "piqa": "validation",
+    "hellaswag": "validation",
+    "winogrande": "validation"
+  },
+  "summary": {
+    "avg_score": 42.27416111257064,
+    "avg_ppl": 21.5150167669804
+  },
+  "results": [
+    {
+      "task": "wikitext",
+      "metric": "ppl",
+      "score": 19.786580290614754,
+      "n": 331725,
+      "higher_is_better": false
+    },
+    {
+      "task": "lambada",
+      "metric": "ppl",
+      "score": 23.243453243346043,
+      "n": 8789,
+      "higher_is_better": false
+    },
+    {
+      "task": "lambada",
+      "metric": "acc",
+      "score": 19.03745391034349,
+      "n": 5153,
+      "higher_is_better": true
+    },
+    {
+      "task": "piqa",
+      "metric": "acc",
+      "score": 65.56039173014146,
+      "n": 1838,
+      "higher_is_better": true
+    },
+    {
+      "task": "hellaswag",
+      "metric": "acc_norm",
+      "score": 33.82792272455686,
+      "n": 10042,
+      "higher_is_better": true
+    },
+    {
+      "task": "winogrande",
+      "metric": "acc",
+      "score": 50.67087608524073,
+      "n": 1267,
+      "higher_is_better": true
+    }
+  ]
+}
