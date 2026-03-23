@@ -237,7 +237,36 @@ class GLATPPlan(TPPlan):
         }
 
 
-TP_PLAN_MAP = {"transformer": TransformerTPPlan, "gla": GLATPPlan}
+class MSGLATPPlan(TPPlan):
+
+    @property
+    def attn_plan(self):
+        plans = {
+            "attn": self.prepare_module_input(
+                input_kwarg_layouts={"hidden_states": Shard(1)},
+                desired_input_kwarg_layouts={"hidden_states": Replicate()},
+            ),
+            # Keep fusion replicated so each rank sees all branch logits before softmax.
+            "attn.fuse": PrepareModuleWeight(layouts=Replicate()),
+        }
+        for branch_idx, _ in enumerate(self.model.config.scales):
+            branch_prefix = f"attn.branches.{branch_idx}"
+            plans.update(
+                {
+                    f"{branch_prefix}.q_proj": self.colwise_parallel(),
+                    f"{branch_prefix}.k_proj": self.colwise_parallel(),
+                    f"{branch_prefix}.v_proj": self.colwise_parallel(),
+                    f"{branch_prefix}.g_proj": self.colwise_parallel(),
+                    f"{branch_prefix}.gk_proj.0": PrepareModuleWeight(layouts=Replicate()),
+                    f"{branch_prefix}.gk_proj.1": self.colwise_parallel(),
+                    f"{branch_prefix}.g_norm": SequenceParallel(sequence_dim=-1),
+                    f"{branch_prefix}.o_proj": self.rowwise_parallel(output_layouts=Shard(1)),
+                }
+            )
+        return plans
+
+
+TP_PLAN_MAP = {"transformer": TransformerTPPlan, "gla": GLATPPlan, "ms_gla": MSGLATPPlan}
 
 
 def apply_tp(
