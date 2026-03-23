@@ -1,0 +1,51 @@
+\documentclass{article}
+\usepackage{booktabs}
+\usepackage{multirow}
+\usepackage{siunitx}
+\usepackage{caption}
+\usepackage[margin=1in]{geometry}
+
+\begin{document}
+
+\begin{table}[ht]
+    \centering
+    \caption{Benchmark results (F1 scores) across models and tasks. All models evaluated on 500 samples per task using the validation split with \texttt{max\_ctx=2048} and \texttt{max\_new\_tokens=32}.}
+    \label{tab:benchmark_results}
+    \setlength{\tabcolsep}{8pt}
+    \begin{tabular}{lcccc}
+        \toprule
+        \textbf{Model} & \textbf{SWDE} & \textbf{FDA} & \textbf{SQuAD} & \textbf{Avg.} \\
+        \midrule
+        GLA (baseline)         & 6.63 & 4.98 & 9.02 & 6.88 \\
+        MS-GLA {[1,2]}         & 7.19 & \textbf{5.84} & \textbf{9.04}  & 7.36 \\
+        MS-GLA {[1,2,4]}       & \textbf{8.77} & 5.68 & 8.93  & \textbf{7.80} \\
+        MS-GLA {[1,2,4,8]}     & 5.27 & 4.29 & 8.67  & 6.08 \\
+        \bottomrule
+    \end{tabular}
+\end{table}
+
+\begin{table}[ht]
+    \centering
+    \caption{Language modeling perplexity (lower is better) and downstream task accuracy (higher is better). All models use \texttt{max\_ctx=2048}, \texttt{stride=1024}.}
+    \label{tab:lm_results}
+    \setlength{\tabcolsep}{6pt}
+    \renewcommand{\arraystretch}{1.1}
+    \begin{tabular}{l | cc | cccc | cc}
+        \toprule
+        \textbf{Model}
+            & \textbf{Wiki.} & \textbf{LMB.}
+            & \textbf{LMB.} & \textbf{PIQA} & \textbf{Hella.} & \textbf{Wino.}
+            & \textbf{Avg. PPL} & \textbf{Avg. Score} \\
+            & ppl $\downarrow$ & ppl $\downarrow$
+            & acc $\uparrow$ & acc $\uparrow$ & acc\_norm $\uparrow$ & acc $\uparrow$
+            & $\downarrow$ & $\uparrow$ \\
+        \midrule
+        GLA (baseline)     & 20.02 & 26.54 & 17.31 & 63.87 & 32.93 & 51.62 & 23.28 & 41.43 \\
+        MS-GLA {[1,2]}     & 19.79 & 23.24 & 19.04 & \textbf{65.56} & \textbf{33.83} & 50.67 & 21.52 & \textbf{42.27} \\
+        MS-GLA {[1,2,4]}   & \textbf{18.85} & \textbf{21.89} & \textbf{19.29} & 64.74 & 33.53 & \textbf{51.22} & \textbf{20.37} & 42.20 \\
+        MS-GLA {[1,2,4,8]} & 19.86 & 21.91 & 19.29 & 63.71 & 33.56 & 49.57 & 20.89 & 41.53 \\
+        \bottomrule
+    \end{tabular}
+\end{table}
+
+\end{document}`
