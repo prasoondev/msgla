@@ -22,7 +22,7 @@
     "squad": "validation"
   },
   "summary": {
-    "avg_score": 7.32348892203438
+    "avg_score": 6.875792152020044
   },
   "results": [
     {
@@ -40,7 +40,7 @@
     {
       "task": "squad",
       "metric": "F1",
-      "score": 10.358988011176876,
+      "score": 9.0158988011176876,
       "n": 500
     }
   ]
