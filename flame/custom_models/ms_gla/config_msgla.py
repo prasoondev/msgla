@@ -49,8 +49,6 @@ class MSGLAConfig(GLAConfig):
             raise ValueError("`scales` must contain at least one scale.")
         if any(scale <= 0 for scale in self.scales):
             raise ValueError("All entries in `scales` must be positive integers.")
-        if self.scales[0] != 1:
-            raise ValueError("The first scale must be 1 so the model always retains a fine-resolution branch.")
         if len(set(self.scales)) != len(self.scales):
             raise ValueError("`scales` must not contain duplicates.")
 

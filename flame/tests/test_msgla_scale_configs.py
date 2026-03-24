@@ -9,14 +9,16 @@ import custom_models  # noqa: E402,F401
 def test_msgla_scale_configs_load():
     config_paths = [
         "/home/prasoon/Documents/research/flame/configs/ms_gla_340M_s12.json",
+        "/home/prasoon/Documents/research/flame/configs/ms_gla_340M_s24.json",
         "/home/prasoon/Documents/research/flame/configs/ms_gla_340M.json",
         "/home/prasoon/Documents/research/flame/configs/ms_gla_340M_s1248.json",
     ]
 
     expected = {
         config_paths[0]: ([1, 2], [2, 2]),
-        config_paths[1]: ([1, 2, 4], [2, 1, 1]),
-        config_paths[2]: ([1, 2, 4, 8], [1, 1, 1, 1]),
+        config_paths[1]: ([2, 4], [2, 2]),
+        config_paths[2]: ([1, 2, 4], [2, 1, 1]),
+        config_paths[3]: ([1, 2, 4, 8], [1, 1, 1, 1]),
     }
 
     for config_path in config_paths:

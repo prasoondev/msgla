@@ -49,7 +49,7 @@ The implementation keeps the total head budget fixed across scales using `scale_
 
 Main MS-GLA-specific config fields:
 
-* `scales`: temporal resolutions to use, must start with `1`
+* `scales`: temporal resolutions to use
 * `scale_num_heads`: head allocation per scale, must sum to `num_heads`
 * `pool_mode`: currently only `avg`
 * `fuse_mode`: `softmax` or `mean`
