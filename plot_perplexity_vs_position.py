@@ -24,22 +24,22 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--gla-json",
-        default="benchmark_gla/results/slimpg19/gla.json",
+        default="benchmark_gla/results/7B/slimpg19/gla_results.json",
         help="Path to GLA JSON results.",
     )
     parser.add_argument(
         "--msgla12-json",
-        default="benchmark_msgla/results/12/slimpg19/msgla_12_results.json",
+        default="benchmark_msgla/results/7B/12/slimpg19/msgla_12_results.json",
         help="Path to MSGLA-12 JSON results.",
     )
     parser.add_argument(
         "--msgla124-json",
-        default="benchmark_msgla/results/124/slimpg19/msgla_124_results.json",
+        default="benchmark_msgla/results/7B/124/slimpg19/msgla_124_results.json",
         help="Path to MSGLA-124 JSON results.",
     )
     parser.add_argument(
         "--msgla1248-json",
-        default="benchmark_msgla/results/1248/slimpg19/msgla_1248_results.json",
+        default="benchmark_msgla/results/7B/1248/slimpg19/msgla_1248_results.json",
         help="Path to MSGLA-1248 JSON results.",
     )
     parser.add_argument(
