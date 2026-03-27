@@ -1,0 +1,47 @@
+{
+  "created_at_utc": "2026-03-27T06:52:18Z",
+  "model_name": "benchmark_msgla",
+  "model_type": "ms_gla",
+  "checkpoint_path": "checkpoint/7B/24/step-106813/tmp/106.pt",
+  "model_ref": "/home/prasoon/Documents/research/msgla/benchmark_msgla",
+  "device": "cuda",
+  "tasks": [
+    "swde",
+    "fda",
+    "squad"
+  ],
+  "max_ctx": 2048,
+  "max_new_tokens": 32,
+  "max_samples": 500,
+  "generation_backend": "cached",
+  "warmup": false,
+  "profile_generation": false,
+  "splits": {
+    "swde": "validation",
+    "fda": "validation",
+    "squad": "validation"
+  },
+  "summary": {
+    "avg_score": 6.5315662255563325
+  },
+  "results": [
+    {
+      "task": "swde",
+      "metric": "F1",
+      "score": 5.961553884711779,
+      "n": 500
+    },
+    {
+      "task": "fda",
+      "metric": "F1",
+      "score": 5.424347635383561,
+      "n": 500
+    },
+    {
+      "task": "squad",
+      "metric": "F1",
+      "score": 8.208797156573656,
+      "n": 500
+    }
+  ]
+}
