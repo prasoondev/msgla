@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Plot perplexity vs. position bucket for GLA/MSGLA result JSON files.
+"""Plot perplexity vs. position bucket for GLA + MSGLA slimpg19 result JSON files.
 
-By default this script reads four model result files and writes one plot per
-shared dataset. With the provided files, that produces two plots:
-- pg19
-- slimpajama-test
+By default this script discovers all variants in:
+benchmark_msgla/results/7B/*/slimpg19/*.json
+and also includes benchmark_gla/results/7B/slimpg19/gla_results.json.
+It writes one plot per shared dataset (e.g., pg19, slimpajama-test).
 """
 
 from __future__ import annotations
@@ -23,24 +23,14 @@ def parse_args() -> argparse.Namespace:
         description="Plot perplexity vs. position bucket for multiple models.",
     )
     parser.add_argument(
+        "--results-root",
+        default="benchmark_msgla/results/7B",
+        help="Root directory that contains per-variant folders (e.g., 12, 14, 24).",
+    )
+    parser.add_argument(
         "--gla-json",
         default="benchmark_gla/results/7B/slimpg19/gla_results.json",
-        help="Path to GLA JSON results.",
-    )
-    parser.add_argument(
-        "--msgla12-json",
-        default="benchmark_msgla/results/7B/12/slimpg19/msgla_12_results.json",
-        help="Path to MSGLA-12 JSON results.",
-    )
-    parser.add_argument(
-        "--msgla124-json",
-        default="benchmark_msgla/results/7B/124/slimpg19/msgla_124_results.json",
-        help="Path to MSGLA-124 JSON results.",
-    )
-    parser.add_argument(
-        "--msgla1248-json",
-        default="benchmark_msgla/results/7B/1248/slimpg19/msgla_1248_results.json",
-        help="Path to MSGLA-1248 JSON results.",
+        help="Path to GLA slimpg19 JSON results.",
     )
     parser.add_argument(
         "--output-dir",
@@ -54,6 +44,43 @@ def parse_args() -> argparse.Namespace:
         help="Upper bound (inclusive) for x-axis bucket positions.",
     )
     return parser.parse_args()
+
+
+def variant_sort_key(variant_name: str) -> tuple[int, int | str]:
+    try:
+        return (0, int(variant_name))
+    except ValueError:
+        return (1, variant_name)
+
+
+def discover_variant_jsons(results_root: Path) -> Dict[str, Path]:
+    if not results_root.exists():
+        raise FileNotFoundError(f"Missing results root: {results_root}")
+
+    candidate_paths = sorted(
+        p for p in results_root.glob("*/slimpg19/*.json") if p.is_file()
+    )
+    if not candidate_paths:
+        raise FileNotFoundError(
+            f"No result JSONs found at {results_root}/<variant>/slimpg19/*.json"
+        )
+
+    variant_to_path: Dict[str, Path] = {}
+    for path in candidate_paths:
+        variant = path.parent.parent.name
+        if variant in variant_to_path:
+            print(
+                "Warning: multiple slimpg19 JSON files found for variant "
+                f"{variant}; using {variant_to_path[variant]} and skipping {path}"
+            )
+            continue
+        variant_to_path[variant] = path
+
+    model_paths: Dict[str, Path] = {}
+    for variant in sorted(variant_to_path.keys(), key=variant_sort_key):
+        model_paths[f"MSGLA-{variant}"] = variant_to_path[variant]
+
+    return model_paths
 
 
 def load_curves_by_dataset(json_path: Path) -> Dict[str, Dict[int, float]]:
@@ -157,12 +184,16 @@ def maybe_plot(
 def main() -> None:
     args = parse_args()
 
-    model_paths = {
-        "GLA": Path(args.gla_json),
-        "MSGLA-12": Path(args.msgla12_json),
-        "MSGLA-124": Path(args.msgla124_json),
-        "MSGLA-1248": Path(args.msgla1248_json),
-    }
+    msgla_model_paths = discover_variant_jsons(Path(args.results_root))
+    print(
+        f"Discovered {len(msgla_model_paths)} MSGLA variants under {args.results_root}."
+    )
+    for label, path in msgla_model_paths.items():
+        print(f"  {label}: {path}")
+
+    model_paths: Dict[str, Path] = {"GLA": Path(args.gla_json)}
+    model_paths.update(msgla_model_paths)
+    print(f"  GLA: {args.gla_json}")
 
     curves_by_model_and_dataset: Dict[str, Dict[str, Dict[int, float]]] = {
         label: load_curves_by_dataset(path) for label, path in model_paths.items()
@@ -176,7 +207,7 @@ def main() -> None:
     )
 
     if not shared_datasets:
-        raise RuntimeError("No shared datasets found across all four result files.")
+        raise RuntimeError("No shared datasets found across discovered result files.")
 
     output_dir = Path(args.output_dir)
     for dataset_name in sorted(shared_datasets):
