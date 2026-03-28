@@ -27,7 +27,7 @@
   "num_kv_heads": null,
   "pool_mode": "avg",
   "scale_num_heads": null,
-  "scales": [1, 4],
+  "scales": [1, 2, 4],
   "tie_word_embeddings": false,
   "transformers_version": "4.50.3",
   "use_cache": true,
