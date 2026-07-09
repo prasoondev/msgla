@@ -382,13 +382,3 @@ python convert_checkpoint_to_hf.py \
 ```
 
 The conversion script imports `custom_models` so that `MSGLAConfig` and `MSGLAForCausalLM` are registered before the model is constructed.
-
-## Known Limitations
-
-Only average pooling is implemented. The code is structured so other pooling modes could be added, but `pool_mode` currently validates only `"avg"`.
-
-`output_attentions` is not supported for MS-GLA layers because the sequence mixer is recurrent linear attention rather than softmax attention. Requests for attentions are disabled in `MSGLAModel`.
-
-More scales increase overhead from branch projections, pooling, upsampling, fusion, and cache bookkeeping even though the total head budget is fixed. Coarser branches run on shorter sequences, which mitigates some of this cost, but MS-GLA is still not a free architectural change.
-
-The current pooling is deterministic and block-aligned. It does not learn linguistic boundaries or adaptive segmentation. This is a deliberate design choice to preserve simple chunkwise compatibility and clear causal semantics.
