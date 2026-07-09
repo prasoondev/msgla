@@ -1,4 +1,4 @@
-# MS-GLA: Multi-Scale Gated Linear Attention
+# MS-GLA: Multi-Scale Gated Linear Attention for Addressing Representational Bottlenecks via Multi-Temporal Resolution
 
 🎉 Accepted at COLM 2026. 🎉
 
