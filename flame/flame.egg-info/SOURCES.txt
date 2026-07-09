@@ -42,6 +42,3 @@ flame/utils/__init__.py
 flame/utils/convert_dcp_to_hf.py
 flame/utils/convert_hf_to_dcp.py
 flame/utils/preprocess.py
-tests/test_msgla.py
-tests/test_msgla_scale_configs.py
-tests/test_msgla_tp.py

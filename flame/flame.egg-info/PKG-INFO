@@ -561,7 +561,7 @@ This repository also includes a built-in custom model named `ms_gla` under `cust
 Current implementation highlights:
 
 * The total attention head budget is preserved across scales through `scale_num_heads`, so multiscale capacity does not come from simply increasing total heads.
-* The first scale must be `1`, which guarantees a fine-resolution branch is always present.
+* Configurations that include scale `1` retain a native token-resolution branch; coarse-only ablations such as `[2, 4]` are also supported by the implementation.
 * Training, cache-based decoding, and `generate()` are supported.
 * Tensor parallel support is implemented for `model_type="ms_gla"`.
 * The currently supported pooling mode is `avg`.
@@ -576,14 +576,6 @@ Useful files:
   * `configs/ms_gla_340M_s12.json`
   * `configs/ms_gla_340M.json`
   * `configs/ms_gla_340M_s1248.json`
-
-Validation and benchmarking helpers:
-
-* Correctness tests: `tests/test_msgla.py`
-* TP plan tests: `tests/test_msgla_tp.py`
-* Scale-config load test: `tests/test_msgla_scale_configs.py`
-* Single-variant benchmark: `tests/benchmark_msgla.py`
-* Scale sweep benchmark: `tests/compare_msgla_scales.py`
 
 Recommended starting points:
 

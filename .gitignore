@@ -4,3 +4,4 @@ checkpoint
 checkpoints
 hf-checkpoints
 *.pt
+*.tex
